@@ -1,8 +1,10 @@
 import ollama
 from sentence_transformers import SentenceTransformer, util
 from collections import Counter
+import spacy
 
 model = SentenceTransformer('all-MiniLM-L6-v2')  # Load the model for semantic comparisons
+nlp = spacy.load("en_core_web_sm")  # Load a SpaCy model for NLP tasks
 
 def read_file(file_path):
     """ Read multi-line entries from a text file separated by empty lines. """
@@ -29,24 +31,23 @@ def get_ollama_responses(questions):
         responses.append(response['message']['content'])
     return responses
 
-def calculate_word_overlap(response, correct_answer):
-    """ Calculate the normalized word overlap between the response and the correct answer. """
-    response_words = Counter(response.lower().split())
-    correct_words = Counter(correct_answer.lower().split())
-    common_words = response_words & correct_words  # Intersection of both counts
-    overlap = sum(common_words.values()) / float(max(len(correct_answer.split()), 1))
-    return overlap
+def extract_main_assertion(text):
+    """ Extract the main verb and its direct object as the assertion (simplified). """
+    doc = nlp(text)
+    for token in doc:
+        if token.dep_ in ('ROOT', 'ccomp'):
+            return ' '.join([child.text.lower() for child in token.subtree if child.dep_ in ('dobj', 'attr', 'prep')])
+    return text.lower()  # Fallback to the original text if specific extraction fails
 
 def enhanced_semantic_comparison(responses, correct_answers):
-    """ Compare responses to the correct answers using both semantic similarity and word overlap. """
+    """ Compare responses to the correct answers focusing on key assertions. """
     results = []
     correct_count = 0
     for response, correct_answer in zip(responses, correct_answers):
-        response_embedding = model.encode(response)
-        correct_answer_embedding = model.encode(correct_answer)
-        similarity = util.pytorch_cos_sim(response_embedding, correct_answer_embedding).item()
-        word_overlap = calculate_word_overlap(response, correct_answer)
-        is_correct = similarity > 0.7 and word_overlap > 0.4  # Adjusted thresholds
+        response_assertion = extract_main_assertion(response)
+        correct_answer_assertion = extract_main_assertion(correct_answer)
+        similarity = util.pytorch_cos_sim(model.encode(response_assertion), model.encode(correct_answer_assertion)).item()
+        is_correct = similarity > 0.75  # Adjusted threshold
         results.append((response, correct_answer, 'Correct' if is_correct else 'Incorrect'))
         if is_correct:
             correct_count += 1
@@ -66,5 +67,6 @@ if __name__ == "__main__":
 
     for question, (response, correct_answer, result) in zip(questions, results):
         print(f"Question: {question}\nResponse: {response}\nCorrect Answer: {correct_answer}\nResult: {result}\n")
+        print('-' * 80)
 
     print(f"LLaMa 3\nSummary: {correct_count} out of {total_questions} questions were answered correctly.\nAccuracy: {accuracy:.2f}%")
